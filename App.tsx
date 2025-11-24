@@ -102,21 +102,77 @@ function App() {
   };
 
   const handleExportData = () => {
-    const data = {
-      exportDate: new Date().toISOString(),
-      patients: db.getPatients(),
-      visits: db.getVisits()
+    const patientsData = db.getPatients();
+    const visitsData = db.getVisits();
+
+    // Helper to convert array of objects to CSV string
+    const convertToCSV = (data: any[]) => {
+      if (!data || data.length === 0) return '';
+      
+      // Get headers
+      const headers = Object.keys(data[0]);
+      const csvRows = [];
+      
+      // Add Header Row
+      csvRows.push(headers.join(','));
+      
+      // Add Data Rows
+      for (const row of data) {
+        const values = headers.map(header => {
+          let val = row[header];
+          
+          // Handle arrays (like medications)
+          if (Array.isArray(val)) {
+            val = val.join(' - ');
+          }
+          
+          // Handle undefined/null
+          if (val === undefined || val === null) {
+            val = '';
+          }
+
+          // Escape quotes and wrap in quotes to handle commas in data
+          const stringVal = String(val).replace(/"/g, '""');
+          return `"${stringVal}"`;
+        });
+        csvRows.push(values.join(','));
+      }
+      
+      // Add BOM for Arabic Excel support
+      return '\uFEFF' + csvRows.join('\n'); 
     };
-    
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `Minya_Diabetes_Backup_${new Date().toISOString().split('T')[0]}.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+
+    // Function to trigger download
+    const downloadFile = (content: string, fileName: string) => {
+      const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', fileName);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    };
+
+    const dateStr = new Date().toISOString().split('T')[0];
+
+    // Download Patients CSV
+    if (patientsData.length > 0) {
+      const patientsCSV = convertToCSV(patientsData);
+      downloadFile(patientsCSV, `Minya_Patients_${dateStr}.csv`);
+    }
+
+    // Download Visits CSV (with slight delay to ensure browser handles both)
+    if (visitsData.length > 0) {
+      setTimeout(() => {
+        const visitsCSV = convertToCSV(visitsData);
+        downloadFile(visitsCSV, `Minya_Visits_${dateStr}.csv`);
+      }, 500);
+    }
+
+    if (patientsData.length === 0 && visitsData.length === 0) {
+      alert("لا توجد بيانات لتصديرها حالياً");
+    }
   };
 
   // --- AI Functions ---
@@ -361,10 +417,10 @@ function App() {
           <div className="mb-6 flex justify-end no-print">
             <button 
               onClick={handleExportData}
-              className="flex items-center gap-2 bg-gray-700 hover:bg-gray-800 text-white px-4 py-2 rounded-lg shadow-md transition-colors text-sm"
+              className="flex items-center gap-2 bg-green-700 hover:bg-green-800 text-white px-4 py-2 rounded-lg shadow-md transition-colors text-sm"
             >
               <Download size={16} />
-              تصدير قاعدة البيانات (Backup)
+              تصدير البيانات (Excel / CSV)
             </button>
           </div>
 
