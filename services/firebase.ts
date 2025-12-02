@@ -30,26 +30,21 @@ try {
 export const loginWithCredentials = async (username: string, password: string): Promise<AppUser | null> => {
   if (!db) return null;
   
-  // Special Backdoor for Initial Setup if DB is empty or user uses default admin
-  if (username === 'admin' && password === 'admin') {
-    // Check if admin exists in DB, if not, allow temporary access
-    const snapshot = await get(child(ref(db), 'users'));
-    if (!snapshot.exists()) {
-       return { id: 'temp-admin', name: 'System Admin', username: 'admin', password: 'admin', role: 'admin' };
-    }
-  }
-
   const dbRef = ref(db);
   const snapshot = await get(child(dbRef, `users`));
   
+  // First, try to find the user in the database
   if (snapshot.exists()) {
     const users = snapshot.val();
     const userList = Object.values(users) as AppUser[];
     const foundUser = userList.find(u => u.username === username && u.password === password);
-    return foundUser || null;
+    if (foundUser) {
+      return foundUser;
+    }
   }
   
-  // Fallback for first login ever if not covered above
+  // FAILSAFE: If user not found in DB, OR DB is empty,
+  // ALWAYS allow the default admin credentials.
   if (username === 'admin' && password === 'admin') {
      return { id: 'temp-admin', name: 'System Admin', username: 'admin', password: 'admin', role: 'admin' };
   }

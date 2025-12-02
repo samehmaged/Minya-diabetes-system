@@ -482,12 +482,6 @@ export default function App() {
               <LogIn size={20} /> تسجيل الدخول
             </button>
           </form>
-
-          <div className="mt-8 bg-yellow-50 p-4 rounded-lg border border-yellow-200 text-xs text-gray-600">
-            <p className="font-bold mb-1">لأول مرة؟</p>
-            <p>اسم المستخدم: <span className="font-mono bg-white px-1 rounded">admin</span></p>
-            <p>كلمة المرور: <span className="font-mono bg-white px-1 rounded">admin</span></p>
-          </div>
         </div>
       </div>
     );
@@ -498,12 +492,19 @@ export default function App() {
     return (
       <>
         {printPatient && (
-           <div className="print-only fixed inset-0 bg-white z-[9999] flex items-center justify-center">
-             <div className="text-center p-10 border-4 border-black rounded-xl w-full max-w-2xl mx-auto">
+           <div className="fixed inset-0 bg-white z-[9999] flex flex-col items-center justify-center">
+             <div className="text-center p-10 border-4 border-black rounded-xl w-full max-w-2xl mx-auto mb-8">
                <h1 className="text-4xl font-bold mb-4">بطاقة مريض سكر</h1>
                <QRCodeComponent value={printPatient.id} size={256} />
                <p className="text-4xl font-bold mt-4">{printPatient.name}</p>
              </div>
+             <button 
+               onClick={() => setPrintPatient(null)}
+               className="no-print bg-gray-800 text-white px-6 py-3 rounded-lg font-bold hover:bg-gray-700 transition-colors flex items-center gap-2"
+             >
+               <X size={20} />
+               <span>إغلاق والعودة للبرنامج</span>
+             </button>
            </div>
         )}
         <Layout role="admin" onLogout={handleLogout} title={`لوحة التحكم - ${user.name}`}>
