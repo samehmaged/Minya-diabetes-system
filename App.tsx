@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   User, Stethoscope, Pill, Plus, Search, QrCode, 
   Printer, ArrowRight, CheckCircle, Activity,
-  Database, Sparkles, Trash2, Calculator, List, Syringe, HeartPulse
+  Database, Sparkles, Trash2, Calculator, List, Syringe, HeartPulse, Wifi, WifiOff
 } from 'lucide-react';
 import { Scanner } from '@yudiel/react-qr-scanner';
 import { GoogleGenAI, Modality } from "@google/genai";
@@ -11,7 +11,7 @@ import { Layout } from './components/Layout';
 import { QRCodeComponent } from './components/QRCodeComponent';
 import { Role, Patient, Visit, MedicationItem } from './types';
 import { DIAGNOSES, MEDICATIONS, SPECIALIST_CLINICS, INSULIN_MEDS } from './constants';
-import * as db from './services/storage';
+import * as db from './services/firebase'; // Switch to Firebase service
 
 // --- Audio Helper Functions for Gemini TTS ---
 function decode(base64: string) {
@@ -52,6 +52,7 @@ export default function App() {
   const [role, setRole] = useState<Role>(null);
   const [patients, setPatients] = useState<Patient[]>([]);
   const [visits, setVisits] = useState<Visit[]>([]);
+  const [isConnected, setIsConnected] = useState(false);
   
   // Doctor View State
   const [scanMode, setScanMode] = useState(false);
@@ -83,11 +84,25 @@ export default function App() {
   const [newPatientAge, setNewPatientAge] = useState('');
   const [printPatient, setPrintPatient] = useState<Patient | null>(null);
 
-  // Load data on mount
+  // Load data via Firebase Realtime Listeners
   useEffect(() => {
-    setPatients(db.getPatients());
-    setVisits(db.getVisits());
-  }, [role]);
+    // Subscribe to patients updates
+    const unsubscribePatients = db.subscribeToPatients((data) => {
+      setPatients(data);
+      setIsConnected(true);
+    });
+
+    // Subscribe to visits updates
+    const unsubscribeVisits = db.subscribeToVisits((data) => {
+      setVisits(data);
+    });
+
+    // Cleanup listeners on unmount
+    return () => {
+      unsubscribePatients();
+      unsubscribeVisits();
+    };
+  }, []);
 
   // Clean up audio
   useEffect(() => {
@@ -255,7 +270,7 @@ export default function App() {
   };
 
   // --- Admin Functions ---
-  const handleAddPatient = (e: React.FormEvent) => {
+  const handleAddPatient = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newPatientName || !newPatientId) return;
 
@@ -268,8 +283,7 @@ export default function App() {
       registrationDate: new Date().toISOString()
     };
 
-    db.savePatient(patient);
-    setPatients(prev => [...prev, patient]);
+    await db.savePatient(patient);
     setNewPatientName('');
     setNewPatientId('');
     setNewPatientAge('');
@@ -350,7 +364,7 @@ export default function App() {
     });
   };
 
-  const handlePrescribe = (e: React.FormEvent) => {
+  const handlePrescribe = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentPatient || !diagnosis) return;
 
@@ -365,9 +379,8 @@ export default function App() {
       status: 'prescribed'
     };
 
-    db.saveVisit(visit);
-    setVisits(prev => [...prev, visit]);
-    alert('تم حفظ الكشف بنجاح!');
+    await db.saveVisit(visit);
+    alert('تم حفظ الكشف بنجاح! سيظهر الآن عند الصيدلي');
     setCurrentPatient(null);
     setMedList([]);
   };
@@ -377,7 +390,11 @@ export default function App() {
   if (!role) {
     return (
       <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4" dir="rtl">
-        <div className="bg-white p-8 rounded-2xl shadow-xl max-w-md w-full text-center">
+        <div className="bg-white p-8 rounded-2xl shadow-xl max-w-md w-full text-center relative overflow-hidden">
+          <div className="absolute top-2 left-2 flex items-center gap-1 text-xs text-gray-400">
+             {isConnected ? <Wifi size={14} className="text-green-500" /> : <WifiOff size={14} className="text-red-500" />}
+             {isConnected ? 'متصل بالسيرفر' : 'جاري الاتصال...'}
+          </div>
           <div className="mx-auto bg-teal-100 w-20 h-20 rounded-full flex items-center justify-center mb-6 text-teal-600">
             <HeartPulse size={40} />
           </div>
@@ -436,7 +453,7 @@ export default function App() {
               </form>
             </div>
             <div className="bg-white p-6 rounded-xl shadow-md">
-              <h3 className="text-xl font-bold mb-4">المرضى المسجلين اليوم</h3>
+              <h3 className="text-xl font-bold mb-4">المرضى المسجلين</h3>
               <div className="space-y-2 max-h-[400px] overflow-auto">
                 {patients.slice().reverse().map(p => (
                   <div key={p.id} className="flex justify-between p-3 bg-gray-50 rounded">
@@ -634,7 +651,7 @@ export default function App() {
                     </div>
                   </div>
                   {visit.status !== 'dispensed' && (
-                    <button onClick={() => { db.updateVisitStatus(visit.id, 'dispensed'); setVisits(prev => prev.map(v => v.id === visit.id ? {...v, status: 'dispensed'} : v)); }} className="bg-blue-600 text-white px-4 py-2 rounded font-bold text-sm">
+                    <button onClick={() => { db.updateVisitStatus(visit.id, 'dispensed'); }} className="bg-blue-600 text-white px-4 py-2 rounded font-bold text-sm">
                       صرف
                     </button>
                   )}
