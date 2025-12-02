@@ -1,3 +1,4 @@
+
 export const DIAGNOSES = [
   "Type 1 Diabetes (النوع الأول)",
   "Type 2 Diabetes (النوع الثاني)",
@@ -11,6 +12,8 @@ export const MEDICATIONS = [
   "Insulin Mixtard 30/70",
   "Insulin Lantus",
   "Insulin Apidra",
+  "Insulin Novorapid",
+  "Insulin Levemir",
   "Metformin 500mg",
   "Metformin 850mg",
   "Metformin 1000mg (XR)",
@@ -20,6 +23,15 @@ export const MEDICATIONS = [
   "Empagliflozin 25mg",
   "Atorvastatin 20mg",
   "Aspirin 75mg",
+  "Pregabalin 75mg",
+];
+
+export const INSULIN_MEDS = [
+  "Insulin Mixtard 30/70",
+  "Insulin Lantus",
+  "Insulin Apidra",
+  "Insulin Novorapid",
+  "Insulin Levemir",
 ];
 
 export const SPECIALIST_CLINICS = [
