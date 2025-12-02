@@ -1,7 +1,7 @@
+
 import { initializeApp } from 'firebase/app';
-import { getDatabase, ref, set, push, onValue, update } from 'firebase/database';
-import { getAnalytics } from "firebase/analytics";
-import { Patient, Visit } from '../types';
+import { getDatabase, ref, set, push, onValue, update, remove, get, child } from 'firebase/database';
+import { Patient, Visit, AppUser } from '../types';
 
 // Configuration directly from the user
 const firebaseConfig = {
@@ -15,18 +15,76 @@ const firebaseConfig = {
   measurementId: "G-0SKVKEZM85"
 };
 
-// Initialize Firebase safely
+// Initialize Firebase
 let db: any;
+
 try {
   const app = initializeApp(firebaseConfig);
   db = getDatabase(app);
-  // Initialize Analytics (optional, but good practice since config provided it)
-  if (typeof window !== 'undefined') {
-    getAnalytics(app);
-  }
 } catch (error) {
   console.error("Firebase initialization error.", error);
 }
+
+// --- Custom Authentication Operations (Database Based) ---
+
+export const loginWithCredentials = async (username: string, password: string): Promise<AppUser | null> => {
+  if (!db) return null;
+  
+  // Special Backdoor for Initial Setup if DB is empty or user uses default admin
+  if (username === 'admin' && password === 'admin') {
+    // Check if admin exists in DB, if not, allow temporary access
+    const snapshot = await get(child(ref(db), 'users'));
+    if (!snapshot.exists()) {
+       return { id: 'temp-admin', name: 'System Admin', username: 'admin', password: 'admin', role: 'admin' };
+    }
+  }
+
+  const dbRef = ref(db);
+  const snapshot = await get(child(dbRef, `users`));
+  
+  if (snapshot.exists()) {
+    const users = snapshot.val();
+    const userList = Object.values(users) as AppUser[];
+    const foundUser = userList.find(u => u.username === username && u.password === password);
+    return foundUser || null;
+  }
+  
+  // Fallback for first login ever if not covered above
+  if (username === 'admin' && password === 'admin') {
+     return { id: 'temp-admin', name: 'System Admin', username: 'admin', password: 'admin', role: 'admin' };
+  }
+
+  return null;
+};
+
+// --- User Management Operations ---
+
+export const subscribeToUsers = (callback: (users: AppUser[]) => void) => {
+  if (!db) return () => {};
+  const usersRef = ref(db, 'users');
+  const unsubscribe = onValue(usersRef, (snapshot) => {
+    const data = snapshot.val();
+    if (data) {
+      callback(Object.values(data) as AppUser[]);
+    } else {
+      callback([]);
+    }
+  });
+  return unsubscribe;
+};
+
+export const addUser = async (user: AppUser) => {
+  if (!db) return;
+  const userRef = ref(db, `users/${user.id}`);
+  await set(userRef, user);
+};
+
+export const deleteUser = async (userId: string) => {
+  if (!db) return;
+  const userRef = ref(db, `users/${userId}`);
+  await remove(userRef);
+};
+
 
 // --- Patients Operations ---
 
@@ -37,7 +95,6 @@ export const subscribeToPatients = (callback: (patients: Patient[]) => void) => 
   const unsubscribe = onValue(patientsRef, (snapshot) => {
     const data = snapshot.val();
     if (data) {
-      // Convert object {id1: {...}, id2: {...}} to Array [{...}, {...}]
       const patientList = Object.values(data) as Patient[];
       callback(patientList);
     } else {
@@ -45,7 +102,7 @@ export const subscribeToPatients = (callback: (patients: Patient[]) => void) => 
     }
   });
 
-  return unsubscribe; // Return function to stop listening
+  return unsubscribe;
 };
 
 export const savePatient = async (patient: Patient) => {

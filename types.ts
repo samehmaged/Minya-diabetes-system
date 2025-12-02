@@ -1,6 +1,14 @@
 
 export type Role = 'doctor' | 'pharmacist' | 'admin' | null;
 
+export interface AppUser {
+  id: string;
+  name: string;
+  username: string;
+  password: string; // Stored simply for this specific use case as requested
+  role: Role;
+}
+
 export interface Patient {
   id: string;
   name: string;
@@ -27,7 +35,7 @@ export interface Visit {
   date: string;
   diagnosis: string;
   medications: MedicationItem[];
-  referral?: string;
+  referral?: string | null; // Changed to allow null for Firebase
   doctorName: string;
   status: 'prescribed' | 'dispensed';
 }

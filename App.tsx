@@ -3,15 +3,15 @@ import React, { useState, useEffect } from 'react';
 import { 
   User, Stethoscope, Pill, Plus, Search, QrCode, 
   Printer, ArrowRight, CheckCircle, Activity,
-  Database, Sparkles, Trash2, Calculator, List, Syringe, HeartPulse, Wifi, WifiOff
+  Database, Sparkles, Trash2, Calculator, List, Syringe, HeartPulse, Wifi, WifiOff, LogIn, Lock, Users, UserPlus, X
 } from 'lucide-react';
 import { Scanner } from '@yudiel/react-qr-scanner';
 import { GoogleGenAI, Modality } from "@google/genai";
 import { Layout } from './components/Layout';
 import { QRCodeComponent } from './components/QRCodeComponent';
-import { Role, Patient, Visit, MedicationItem } from './types';
+import { Role, Patient, Visit, MedicationItem, AppUser } from './types';
 import { DIAGNOSES, MEDICATIONS, SPECIALIST_CLINICS, INSULIN_MEDS } from './constants';
-import * as db from './services/firebase'; // Switch to Firebase service
+import * as db from './services/firebase';
 
 // --- Audio Helper Functions for Gemini TTS ---
 function decode(base64: string) {
@@ -49,11 +49,17 @@ const generateId = () => {
 };
 
 export default function App() {
-  const [role, setRole] = useState<Role>(null);
+  const [user, setUser] = useState<AppUser | null>(null);
   const [patients, setPatients] = useState<Patient[]>([]);
   const [visits, setVisits] = useState<Visit[]>([]);
+  const [appUsers, setAppUsers] = useState<AppUser[]>([]); // List of all staff
   const [isConnected, setIsConnected] = useState(false);
   
+  // Login State
+  const [loginUsername, setLoginUsername] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
+
   // Doctor View State
   const [scanMode, setScanMode] = useState(false);
   const [showSimulatedScanner, setShowSimulatedScanner] = useState(false);
@@ -79,28 +85,37 @@ export default function App() {
   const [audioSource, setAudioSource] = useState<AudioBufferSourceNode | null>(null);
 
   // Admin View State
+  const [activeTab, setActiveTab] = useState<'patients' | 'users'>('patients');
   const [newPatientName, setNewPatientName] = useState('');
   const [newPatientId, setNewPatientId] = useState('');
   const [newPatientAge, setNewPatientAge] = useState('');
   const [printPatient, setPrintPatient] = useState<Patient | null>(null);
+  
+  // Admin User Management State
+  const [newUser, setNewUser] = useState({ name: '', username: '', password: '', role: 'doctor' as Role });
 
   // Load data via Firebase Realtime Listeners
   useEffect(() => {
-    // Subscribe to patients updates
+    // Subscribe to patients
     const unsubscribePatients = db.subscribeToPatients((data) => {
       setPatients(data);
       setIsConnected(true);
     });
 
-    // Subscribe to visits updates
+    // Subscribe to visits
     const unsubscribeVisits = db.subscribeToVisits((data) => {
       setVisits(data);
     });
 
-    // Cleanup listeners on unmount
+    // Subscribe to users (staff)
+    const unsubscribeUsers = db.subscribeToUsers((data) => {
+      setAppUsers(data);
+    });
+
     return () => {
       unsubscribePatients();
       unsubscribeVisits();
+      unsubscribeUsers();
     };
   }, []);
 
@@ -110,23 +125,31 @@ export default function App() {
       if (audioSource) audioSource.stop();
       if (audioContext) audioContext.close();
     };
-  }, [currentPatient, role]);
+  }, [currentPatient, user]);
 
-  const handleLogin = (selectedRole: Role) => {
-    setRole(selectedRole);
-    setScanMode(false);
-    setShowSimulatedScanner(false);
-    setCurrentPatient(null);
-    setAiSummary('');
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginError('');
+    try {
+      const loggedUser = await db.loginWithCredentials(loginUsername, loginPassword);
+      if (loggedUser) {
+        setUser(loggedUser);
+      } else {
+        setLoginError('اسم المستخدم أو كلمة المرور غير صحيحة');
+      }
+    } catch (err) {
+      setLoginError('حدث خطأ أثناء تسجيل الدخول');
+    }
   };
 
-  const handleLogout = () => {
-    setRole(null);
+  const handleLogout = async () => {
+    setUser(null);
+    setLoginUsername('');
+    setLoginPassword('');
     if (audioSource) audioSource.stop();
   };
 
   const handleExportArchive = () => {
-    // Advanced CSV Export acting as a Database Archive
     const BOM = "\uFEFF";
     let csvContent = BOM + "VisitID,Date,PatientName,NationalID,Age,Diagnosis,Med_Name,Med_Type,Dosage_Units,Frequency,Duration,Calculated_Qty,Doctor,Status,Referral\n";
 
@@ -152,9 +175,7 @@ export default function App() {
         csvContent += row + "\n";
       } else {
         medsArray.forEach((med: any) => {
-          // Backward compatibility check
           const isObj = typeof med === 'object';
-          
           const row = [
             visit.id,
             visit.date,
@@ -291,6 +312,29 @@ export default function App() {
     setTimeout(() => window.print(), 500);
   };
 
+  const handleCreateUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newUser.username || !newUser.password || !newUser.name) return;
+    
+    const userToSave: AppUser = {
+      id: generateId(),
+      name: newUser.name,
+      username: newUser.username,
+      password: newUser.password,
+      role: newUser.role
+    };
+
+    await db.addUser(userToSave);
+    setNewUser({ name: '', username: '', password: '', role: 'doctor' });
+    alert('تم إضافة الموظف بنجاح');
+  };
+
+  const handleDeleteUser = async (userId: string) => {
+    if (window.confirm('هل أنت متأكد من حذف هذا الموظف؟')) {
+      await db.deleteUser(userId);
+    }
+  };
+
   // --- Doctor Functions ---
   const handleScan = (result: any) => {
     if (result) {
@@ -332,13 +376,10 @@ export default function App() {
     let quantityStr = "";
     
     if (currentMed.type === 'insulin') {
-      // Calculate Pens
       const totalUnits = currentMed.units * currentMed.freqTimes * currentMed.durationDays;
-      // Assume 1 pen = 300 units (Standard)
       const pens = Math.ceil(totalUnits / 300);
       quantityStr = `${pens} Pens (${totalUnits} units)`;
     } else {
-      // Calculate Tablets
       const totalTabs = currentMed.freqTimes * currentMed.durationDays;
       quantityStr = `${totalTabs} Tablets`;
     }
@@ -354,7 +395,6 @@ export default function App() {
     };
 
     setMedList(prev => [...prev, newItem]);
-    // Reset but keep type smart
     setCurrentMed({ 
       name: '', 
       type: 'tablet', 
@@ -374,8 +414,9 @@ export default function App() {
       date: new Date().toISOString().split('T')[0],
       diagnosis,
       medications: medList,
-      referral: referral || undefined,
-      doctorName: "Dr. Amr Al-Kadi",
+      // Fix: Use null instead of undefined for Firebase compatibility
+      referral: referral || null,
+      doctorName: user?.name || "Doctor",
       status: 'prescribed'
     };
 
@@ -387,32 +428,65 @@ export default function App() {
 
   // --- VIEW RENDERING ---
 
-  if (!role) {
+  // 1. Initial State: Login Screen
+  if (!user) {
     return (
       <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4" dir="rtl">
-        <div className="bg-white p-8 rounded-2xl shadow-xl max-w-md w-full text-center relative overflow-hidden">
+        <div className="bg-white p-8 rounded-2xl shadow-xl max-w-md w-full relative">
           <div className="absolute top-2 left-2 flex items-center gap-1 text-xs text-gray-400">
              {isConnected ? <Wifi size={14} className="text-green-500" /> : <WifiOff size={14} className="text-red-500" />}
-             {isConnected ? 'متصل بالسيرفر' : 'جاري الاتصال...'}
+             {isConnected ? 'متصل' : 'جاري الاتصال...'}
           </div>
           <div className="mx-auto bg-teal-100 w-20 h-20 rounded-full flex items-center justify-center mb-6 text-teal-600">
             <HeartPulse size={40} />
           </div>
-          <h1 className="text-3xl font-bold text-gray-800 mb-2">عيادة السكر</h1>
-          <p className="text-gray-500 mb-8">التأمين الصحي - فرع المنيا</p>
-          <div className="space-y-4">
-            <button onClick={() => handleLogin('doctor')} className="w-full flex items-center justify-between p-4 bg-white border-2 border-teal-500 rounded-xl hover:bg-teal-50">
-              <span className="font-bold text-lg text-teal-700">دخول طبيب</span>
-              <Stethoscope className="text-teal-500" />
+          <h1 className="text-3xl font-bold text-gray-800 text-center mb-2">عيادة السكر</h1>
+          <p className="text-gray-500 text-center mb-8">التأمين الصحي - فرع المنيا</p>
+          
+          <form onSubmit={handleLogin} className="space-y-4">
+            <div>
+              <label className="block text-sm font-bold text-gray-700 mb-1">اسم المستخدم</label>
+              <div className="relative">
+                <input 
+                  type="text" 
+                  value={loginUsername} 
+                  onChange={e => setLoginUsername(e.target.value)}
+                  className="w-full p-3 pr-10 border rounded-lg focus:ring-2 focus:ring-teal-500 outline-none"
+                  placeholder="username"
+                  required
+                />
+                <User className="absolute right-3 top-3 text-gray-400" size={20} />
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-bold text-gray-700 mb-1">كلمة المرور</label>
+              <div className="relative">
+                <input 
+                  type="password" 
+                  value={loginPassword} 
+                  onChange={e => setLoginPassword(e.target.value)}
+                  className="w-full p-3 pr-10 border rounded-lg focus:ring-2 focus:ring-teal-500 outline-none"
+                  placeholder="password"
+                  required
+                />
+                <Lock className="absolute right-3 top-3 text-gray-400" size={20} />
+              </div>
+            </div>
+            
+            {loginError && <p className="text-red-500 text-sm text-center">{loginError}</p>}
+            
+            <button 
+              type="submit"
+              className="w-full bg-teal-600 text-white py-3 rounded-xl font-bold hover:bg-teal-700 transition-colors shadow-md flex items-center justify-center gap-2"
+            >
+              <LogIn size={20} /> تسجيل الدخول
             </button>
-            <button onClick={() => handleLogin('pharmacist')} className="w-full flex items-center justify-between p-4 bg-white border-2 border-blue-500 rounded-xl hover:bg-blue-50">
-              <span className="font-bold text-lg text-blue-700">دخول صيدلي</span>
-              <Pill className="text-blue-500" />
-            </button>
-            <button onClick={() => handleLogin('admin')} className="w-full flex items-center justify-between p-4 bg-white border-2 border-purple-500 rounded-xl hover:bg-purple-50">
-              <span className="font-bold text-lg text-purple-700">استقبال / تمريض</span>
-              <User className="text-purple-500" />
-            </button>
+          </form>
+
+          <div className="mt-8 bg-yellow-50 p-4 rounded-lg border border-yellow-200 text-xs text-gray-600">
+            <p className="font-bold mb-1">لأول مرة؟</p>
+            <p>اسم المستخدم: <span className="font-mono bg-white px-1 rounded">admin</span></p>
+            <p>كلمة المرور: <span className="font-mono bg-white px-1 rounded">admin</span></p>
           </div>
         </div>
       </div>
@@ -420,7 +494,7 @@ export default function App() {
   }
 
   // Admin View
-  if (role === 'admin') {
+  if (user.role === 'admin') {
     return (
       <>
         {printPatient && (
@@ -432,50 +506,112 @@ export default function App() {
              </div>
            </div>
         )}
-        <Layout role="admin" onLogout={handleLogout} title="الاستقبال">
-          <div className="mb-6 flex justify-end">
-            <button onClick={handleExportArchive} className="flex items-center gap-2 bg-green-700 hover:bg-green-800 text-white px-4 py-2 rounded-lg text-sm">
-              <Database size={16} /> تحميل أرشيف الحالات (CSV)
-            </button>
+        <Layout role="admin" onLogout={handleLogout} title={`لوحة التحكم - ${user.name}`}>
+          <div className="flex gap-4 mb-6 border-b">
+             <button 
+               onClick={() => setActiveTab('patients')}
+               className={`pb-2 px-4 font-bold flex items-center gap-2 ${activeTab === 'patients' ? 'text-teal-600 border-b-2 border-teal-600' : 'text-gray-500'}`}
+             >
+               <UserPlus size={18} /> الاستقبال وتسجيل المرضى
+             </button>
+             <button 
+               onClick={() => setActiveTab('users')}
+               className={`pb-2 px-4 font-bold flex items-center gap-2 ${activeTab === 'users' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500'}`}
+             >
+               <Users size={18} /> إدارة الموظفين
+             </button>
           </div>
-          <div className="grid md:grid-cols-2 gap-8">
-            <div className="bg-white p-6 rounded-xl shadow-md border-t-4 border-teal-600">
-              <h3 className="text-xl font-bold mb-6 flex items-center gap-2">
-                <Plus size={24} className="text-teal-600" /> تسجيل مريض جديد
-              </h3>
-              <form onSubmit={handleAddPatient} className="space-y-4">
-                <input type="text" required value={newPatientName} onChange={e => setNewPatientName(e.target.value)} className="w-full p-3 border rounded-lg" placeholder="اسم المريض" />
-                <div className="grid grid-cols-2 gap-4">
-                  <input type="text" required value={newPatientId} onChange={e => setNewPatientId(e.target.value)} className="w-full p-3 border rounded-lg" placeholder="رقم قومي" />
-                  <input type="number" value={newPatientAge} onChange={e => setNewPatientAge(e.target.value)} className="w-full p-3 border rounded-lg" placeholder="السن" />
-                </div>
-                <button type="submit" className="w-full bg-teal-700 text-white py-3 rounded-lg font-bold">حفظ وطباعة</button>
-              </form>
-            </div>
-            <div className="bg-white p-6 rounded-xl shadow-md">
-              <h3 className="text-xl font-bold mb-4">المرضى المسجلين</h3>
-              <div className="space-y-2 max-h-[400px] overflow-auto">
-                {patients.slice().reverse().map(p => (
-                  <div key={p.id} className="flex justify-between p-3 bg-gray-50 rounded">
-                    <div>
-                      <p className="font-bold">{p.name}</p>
-                      <p className="text-xs text-gray-500">{p.nationalId}</p>
+
+          {activeTab === 'patients' ? (
+            <div>
+               <div className="mb-6 flex justify-end">
+                <button onClick={handleExportArchive} className="flex items-center gap-2 bg-green-700 hover:bg-green-800 text-white px-4 py-2 rounded-lg text-sm">
+                  <Database size={16} /> تحميل أرشيف الحالات (CSV)
+                </button>
+              </div>
+              <div className="grid md:grid-cols-2 gap-8">
+                <div className="bg-white p-6 rounded-xl shadow-md border-t-4 border-teal-600">
+                  <h3 className="text-xl font-bold mb-6 flex items-center gap-2">
+                    <Plus size={24} className="text-teal-600" /> تسجيل مريض جديد
+                  </h3>
+                  <form onSubmit={handleAddPatient} className="space-y-4">
+                    <input type="text" required value={newPatientName} onChange={e => setNewPatientName(e.target.value)} className="w-full p-3 border rounded-lg" placeholder="اسم المريض" />
+                    <div className="grid grid-cols-2 gap-4">
+                      <input type="text" required value={newPatientId} onChange={e => setNewPatientId(e.target.value)} className="w-full p-3 border rounded-lg" placeholder="رقم قومي" />
+                      <input type="number" value={newPatientAge} onChange={e => setNewPatientAge(e.target.value)} className="w-full p-3 border rounded-lg" placeholder="السن" />
                     </div>
-                    <button onClick={() => { setPrintPatient(p); setTimeout(() => window.print(), 100); }}>
-                      <Printer size={16} />
-                    </button>
+                    <button type="submit" className="w-full bg-teal-700 text-white py-3 rounded-lg font-bold">حفظ وطباعة</button>
+                  </form>
+                </div>
+                <div className="bg-white p-6 rounded-xl shadow-md">
+                  <h3 className="text-xl font-bold mb-4">المرضى المسجلين</h3>
+                  <div className="space-y-2 max-h-[400px] overflow-auto">
+                    {patients.slice().reverse().map(p => (
+                      <div key={p.id} className="flex justify-between p-3 bg-gray-50 rounded">
+                        <div>
+                          <p className="font-bold">{p.name}</p>
+                          <p className="text-xs text-gray-500">{p.nationalId}</p>
+                        </div>
+                        <button onClick={() => { setPrintPatient(p); setTimeout(() => window.print(), 100); }}>
+                          <Printer size={16} />
+                        </button>
+                      </div>
+                    ))}
                   </div>
-                ))}
+                </div>
               </div>
             </div>
-          </div>
+          ) : (
+            <div className="grid md:grid-cols-2 gap-8">
+               <div className="bg-white p-6 rounded-xl shadow-md border-t-4 border-blue-600">
+                  <h3 className="text-xl font-bold mb-6 flex items-center gap-2">
+                    <UserPlus size={24} className="text-blue-600" /> إضافة موظف جديد
+                  </h3>
+                  <form onSubmit={handleCreateUser} className="space-y-4">
+                    <input type="text" required value={newUser.name} onChange={e => setNewUser({...newUser, name: e.target.value})} className="w-full p-3 border rounded-lg" placeholder="الاسم الكامل" />
+                    <input type="text" required value={newUser.username} onChange={e => setNewUser({...newUser, username: e.target.value})} className="w-full p-3 border rounded-lg" placeholder="اسم المستخدم (للدخول)" />
+                    <input type="text" required value={newUser.password} onChange={e => setNewUser({...newUser, password: e.target.value})} className="w-full p-3 border rounded-lg" placeholder="كلمة المرور" />
+                    <select value={newUser.role || 'doctor'} onChange={e => setNewUser({...newUser, role: e.target.value as Role})} className="w-full p-3 border rounded-lg">
+                      <option value="doctor">طبيب</option>
+                      <option value="pharmacist">صيدلي</option>
+                      <option value="admin">إداري / تمريض</option>
+                    </select>
+                    <button type="submit" className="w-full bg-blue-700 text-white py-3 rounded-lg font-bold">إضافة الموظف</button>
+                  </form>
+               </div>
+               <div className="bg-white p-6 rounded-xl shadow-md">
+                  <h3 className="text-xl font-bold mb-4">قائمة الموظفين</h3>
+                  <div className="space-y-2 max-h-[400px] overflow-auto">
+                    {appUsers.length === 0 && <p className="text-gray-500 text-center py-4">لا يوجد موظفين مسجلين</p>}
+                    {appUsers.map(u => (
+                      <div key={u.id} className="flex justify-between items-center p-3 bg-gray-50 rounded border hover:bg-gray-100">
+                        <div>
+                          <p className="font-bold flex items-center gap-2">
+                             {u.role === 'admin' && <User size={14} className="text-purple-500" />}
+                             {u.role === 'doctor' && <Stethoscope size={14} className="text-teal-500" />}
+                             {u.role === 'pharmacist' && <Pill size={14} className="text-blue-500" />}
+                             {u.name}
+                          </p>
+                          <p className="text-xs text-gray-500">username: {u.username} | pass: {u.password}</p>
+                        </div>
+                        {u.username !== 'admin' && (
+                          <button onClick={() => handleDeleteUser(u.id)} className="text-red-500 hover:bg-red-50 p-2 rounded">
+                            <Trash2 size={16} />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+               </div>
+            </div>
+          )}
         </Layout>
       </>
     );
   }
 
   // Doctor View
-  if (role === 'doctor') {
+  if (user.role === 'doctor') {
     if (scanMode) {
       return (
         <div className="fixed inset-0 bg-black z-50 flex flex-col items-center justify-center text-white">
@@ -506,7 +642,7 @@ export default function App() {
     }
     if (currentPatient) {
       return (
-        <Layout role="doctor" onLogout={handleLogout} title="التشخيص والعلاج">
+        <Layout role="doctor" onLogout={handleLogout} title={`د. ${user.name}`}>
           <div className="grid lg:grid-cols-3 gap-6">
             <div className="lg:col-span-1 space-y-6">
               <div className="bg-white p-6 rounded-xl shadow border">
@@ -596,9 +732,9 @@ export default function App() {
                 </div>
 
                 <div className="mb-6">
-                  <label className="block font-bold mb-2">تحويل إلى</label>
+                  <label className="block font-bold mb-2">تحويل إلى <span className="text-xs font-normal text-gray-500">(اختياري)</span></label>
                   <select value={referral} onChange={e => setReferral(e.target.value)} className="w-full p-3 border rounded bg-gray-50">
-                    <option value="">لا يوجد</option>
+                    <option value="">لا يوجد تحويل</option>
                     {SPECIALIST_CLINICS.map(c => <option key={c} value={c}>{c}</option>)}
                   </select>
                 </div>
@@ -611,7 +747,7 @@ export default function App() {
       );
     }
     return (
-      <Layout role="doctor" onLogout={handleLogout} title="بوابة الطبيب">
+      <Layout role="doctor" onLogout={handleLogout} title={`بوابة الطبيب (${user.name})`}>
         <div className="flex flex-col items-center justify-center min-h-[60vh] gap-6">
           <div className="bg-teal-50 p-6 rounded-full"><QrCode size={64} className="text-teal-600"/></div>
           <div className="flex gap-4 w-full max-w-lg">
@@ -624,11 +760,12 @@ export default function App() {
   }
 
   // Pharmacist View
-  if (role === 'pharmacist') {
+  if (user.role === 'pharmacist') {
     const todayVisits = visits.filter(v => v.date === new Date().toISOString().split('T')[0]).reverse();
     return (
-      <Layout role="pharmacist" onLogout={handleLogout} title="الصيدلية">
+      <Layout role="pharmacist" onLogout={handleLogout} title={`الصيدلية (${user.name})`}>
         <div className="space-y-4">
+          {todayVisits.length === 0 && <p className="text-center text-gray-500 py-10">لا توجد وصفات طبية اليوم</p>}
           {todayVisits.map(visit => {
             const patient = patients.find(p => p.id === visit.patientId);
             if (!patient) return null;
@@ -637,6 +774,9 @@ export default function App() {
                 <div className="flex justify-between items-start">
                   <div>
                     <h3 className="font-bold text-lg">{patient.name}</h3>
+                    <div className="flex items-center gap-2 mb-2">
+                       <span className="text-xs bg-gray-100 px-2 py-1 rounded">د. {visit.doctorName}</span>
+                    </div>
                     <p className="text-gray-500 text-sm mb-3">التشخيص: {visit.diagnosis}</p>
                     <div className="space-y-2">
                        {visit.medications.map((med, idx) => (
